@@ -43,6 +43,7 @@ jobs:
           test -f www/native/android/KRDownloaderPlugin.java
           test -f www/native/android/MainActivity.java
           test -f www/native/android/open-with-filter.xml
+          test -f www/js/features/library-screen.js
 
       - name: Capacitor setup
         run: |
@@ -84,6 +85,13 @@ jobs:
           f = open("www/native/android/open-with-filter.xml").read()
           if "application/pdf" not in s:
               s = s.replace("</activity>", f + "        </activity>", 1)
+          if "MANAGE_EXTERNAL_STORAGE" not in s:
+              perms = (
+                  '    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n'
+                  '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n'
+              )
+              s = s.replace("<application", '<application android:requestLegacyExternalStorage="true"', 1)
+              s = s.replace("<application", perms + "    <application", 1)
           open(p, "w").write(s)
           PY
           rm -rf www/native
