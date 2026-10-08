@@ -121,6 +121,18 @@ jobs:
           sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#&\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />#' "$MF"
           cat "$MF"
 
+      - name: Native pull-to-refresh dependency
+        run: |
+          python3 - <<'PY'
+          p = "android/app/build.gradle"
+          s = open(p).read()
+          dep = 'implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"'
+          if "swiperefreshlayout" not in s:
+              s = s.replace("dependencies {", "dependencies {\n    " + dep, 1)
+              open(p, "w").write(s)
+          PY
+          grep -n "swiperefreshlayout" android/app/build.gradle
+
       - name: App icon
         continue-on-error: true
         run: |
