@@ -58,21 +58,43 @@ jobs:
           EOF2
           npx cap add android
 
-      - name: Bundle offline libraries (PDF.js, Supabase, icons)
+      - name: Bundle offline libraries (PDF.js, Supabase)
         continue-on-error: true
         run: |
-          npm i --omit=optional pdfjs-dist@4.10.38 @supabase/supabase-js@2 @fortawesome/fontawesome-free@6.7.2 esbuild
-          mkdir -p www/vendor/pdfjs www/vendor/fa/css
+          npm i --omit=optional pdfjs-dist@4.10.38 @supabase/supabase-js@2 esbuild
+          mkdir -p www/vendor/pdfjs
           cp node_modules/pdfjs-dist/build/pdf.mjs www/vendor/pdfjs/
           cp node_modules/pdfjs-dist/build/pdf.worker.mjs www/vendor/pdfjs/
-          cp node_modules/@fortawesome/fontawesome-free/css/all.min.css www/vendor/fa/css/
-          cp -r node_modules/@fortawesome/fontawesome-free/webfonts www/vendor/fa/webfonts
           echo "export { createClient } from '@supabase/supabase-js';" > vendor-entry.js
           npx esbuild vendor-entry.js --bundle --format=esm --minify --platform=browser --outfile=www/vendor/supabase.js
-          sed -i 's#https://cdnjs.cloudflare.com/ajax/libs/font-awesome/[0-9.]*/css/all.min.css#./vendor/fa/css/all.min.css#' www/index.html
+          # Icons are now inline SVG (css/icons.css), so Font Awesome is no longer bundled.
           echo "Vendor files:"
-          ls -la www/vendor www/vendor/pdfjs www/vendor/fa/css
-          grep -n "vendor/fa" www/index.html
+          ls -la www/vendor www/vendor/pdfjs
+
+      - name: Bundle offline fonts (Noto Naskh Arabic + Inter)
+        continue-on-error: true
+        run: |
+          npm i --omit=optional @fontsource-variable/noto-naskh-arabic @fontsource-variable/inter
+          for p in noto-naskh-arabic inter; do
+            mkdir -p www/vendor/fonts/$p
+            cp -r node_modules/@fontsource-variable/$p/files www/vendor/fonts/$p/files
+            cp node_modules/@fontsource-variable/$p/index.css www/vendor/fonts/$p/index.css
+          done
+          # Swap the Google Fonts <link> (needs internet) for the bundled copies (works offline).
+          python3 - <<'PY'
+          import re
+          p = "www/index.html"
+          s = open(p, encoding="utf-8").read()
+          local = ('<link rel="stylesheet" href="./vendor/fonts/noto-naskh-arabic/index.css">\n  '
+                   '<link rel="stylesheet" href="./vendor/fonts/inter/index.css">')
+          s2 = re.sub(r'<link rel="stylesheet" href="https://fonts\.googleapis\.com[^>]*>', local, s)
+          s2 = re.sub(r'\s*<link rel="preconnect" href="https://fonts\.(googleapis|gstatic)\.com"[^>]*>', '', s2)
+          open(p, "w", encoding="utf-8").write(s2)
+          print("fonts link swapped:", s2 != s)
+          PY
+          echo "Font files:"
+          ls www/vendor/fonts/*/files | head -20
+          grep -n "vendor/fonts" www/index.html || true
 
       - name: Native Android plugin (Downloads, reader, Open with)
         run: |
