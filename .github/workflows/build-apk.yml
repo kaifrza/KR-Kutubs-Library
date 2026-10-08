@@ -133,6 +133,33 @@ jobs:
           PY
           grep -n "swiperefreshlayout" android/app/build.gradle
 
+      - name: MuPDF native reader (dependency + activity)
+        run: |
+          META=$(curl -fsS https://repo1.maven.org/maven2/com/artifex/mupdf/fitz/maven-metadata.xml || true)
+          VER=$(echo "$META" | grep -o '<version>1\.24\.[0-9]*</version>' | sed 's/<[^>]*>//g' | sort -V | tail -1)
+          if [ -z "$VER" ]; then VER=1.24.10; fi
+          echo "Using MuPDF fitz $VER"
+          echo "$VER" > mupdf-version.txt
+          python3 - <<'PY'
+          ver = open("mupdf-version.txt").read().strip()
+          p = "android/app/build.gradle"
+          s = open(p).read()
+          dep = 'implementation "com.artifex.mupdf:fitz:%s"' % ver
+          if "com.artifex.mupdf:fitz" not in s:
+              s = s.replace("dependencies {", "dependencies {\n    " + dep, 1)
+              open(p, "w").write(s)
+          m = "android/app/src/main/AndroidManifest.xml"
+          t = open(m).read()
+          act = ('        <activity android:name=".MuReaderActivity" android:exported="false"'
+                 ' android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"'
+                 ' android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />\n')
+          if "MuReaderActivity" not in t:
+              t = t.replace("</application>", act + "    </application>", 1)
+              open(m, "w").write(t)
+          PY
+          grep -n "fitz\|swiperefresh" android/app/build.gradle
+          grep -n "MuReaderActivity" android/app/src/main/AndroidManifest.xml
+
       - name: App icon
         continue-on-error: true
         run: |
@@ -154,7 +181,35 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        shell: bash
+        run: |
+          set +e
+          ./gradlew assembleDebug 2>&1 | tee ../build1.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning::Build with the MuPDF reader FAILED - rebuilding WITHOUT it (the pdf.js reader will be used)."
+            {
+              echo "## MuPDF build failed - APK was rebuilt without the MuPDF reader"
+              echo "Send these lines to Claude:"
+              echo '```'
+              grep -E "error:|error: |\.java:[0-9]+|FAILED|What went wrong|Could not resolve|not found" ../build1.log | head -60
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            rm -f app/src/main/java/com/kr/urdulibrary/MuPdfView.java app/src/main/java/com/kr/urdulibrary/MuReaderActivity.java
+            python3 - <<'PY2'
+            import re
+            p = "app/build.gradle"
+            s = open(p).read()
+            s = re.sub(r'\n\s*implementation "com\.artifex\.mupdf:fitz:[^"]*"', '', s)
+            open(p, "w").write(s)
+            m = "app/src/main/AndroidManifest.xml"
+            t = open(m).read()
+            t = re.sub(r'\s*<activity android:name="\.MuReaderActivity"[^>]*/>', '', t)
+            open(m, "w").write(t)
+            PY2
+            ./gradlew assembleDebug
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
