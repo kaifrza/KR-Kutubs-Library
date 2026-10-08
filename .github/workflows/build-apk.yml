@@ -135,19 +135,30 @@ jobs:
 
       - name: MuPDF native reader (dependency + activity)
         run: |
-          META=$(curl -fsS https://repo1.maven.org/maven2/com/artifex/mupdf/fitz/maven-metadata.xml || true)
+          # MuPDF is NOT on Maven Central: Artifex publishes it on maven.ghostscript.com
+          META=$(curl -fsSL https://maven.ghostscript.com/com/artifex/mupdf/fitz/maven-metadata.xml || true)
           VER=$(echo "$META" | grep -o '<version>1\.24\.[0-9]*</version>' | sed 's/<[^>]*>//g' | sort -V | tail -1)
           if [ -z "$VER" ]; then VER=1.24.10; fi
           echo "Using MuPDF fitz $VER"
           echo "$VER" > mupdf-version.txt
           python3 - <<'PY'
+          import re
           ver = open("mupdf-version.txt").read().strip()
+          # repository (root build.gradle: allprojects + buildscript)
+          r = "android/build.gradle"
+          rs = open(r).read()
+          repo = "maven { url 'https://maven.ghostscript.com/' }"
+          if "maven.ghostscript.com" not in rs:
+              rs = rs.replace("mavenCentral()", "mavenCentral()\n        " + repo)
+              open(r, "w").write(rs)
+          # dependency
           p = "android/app/build.gradle"
           s = open(p).read()
           dep = 'implementation "com.artifex.mupdf:fitz:%s"' % ver
           if "com.artifex.mupdf:fitz" not in s:
               s = s.replace("dependencies {", "dependencies {\n    " + dep, 1)
               open(p, "w").write(s)
+          # activity
           m = "android/app/src/main/AndroidManifest.xml"
           t = open(m).read()
           act = ('        <activity android:name=".MuReaderActivity" android:exported="false"'
@@ -157,6 +168,7 @@ jobs:
               t = t.replace("</application>", act + "    </application>", 1)
               open(m, "w").write(t)
           PY
+          grep -n "ghostscript" android/build.gradle
           grep -n "fitz\|swiperefresh" android/app/build.gradle
           grep -n "MuReaderActivity" android/app/src/main/AndroidManifest.xml
 
@@ -187,29 +199,16 @@ jobs:
           ./gradlew assembleDebug 2>&1 | tee ../build1.log
           RC=${PIPESTATUS[0]}
           set -e
-          if [ "$RC" -ne 0 ]; then
-            echo "::warning::Build with the MuPDF reader FAILED - rebuilding WITHOUT it (the pdf.js reader will be used)."
-            {
-              echo "## MuPDF build failed - APK was rebuilt without the MuPDF reader"
-              echo "Send these lines to Claude:"
-              echo '```'
-              grep -E "error:|error: |\.java:[0-9]+|FAILED|What went wrong|Could not resolve|not found" ../build1.log | head -60
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            rm -f app/src/main/java/com/kr/urdulibrary/MuPdfView.java app/src/main/java/com/kr/urdulibrary/MuReaderActivity.java
-            python3 - <<'PY2'
-            import re
-            p = "app/build.gradle"
-            s = open(p).read()
-            s = re.sub(r'\n\s*implementation "com\.artifex\.mupdf:fitz:[^"]*"', '', s)
-            open(p, "w").write(s)
-            m = "app/src/main/AndroidManifest.xml"
-            t = open(m).read()
-            t = re.sub(r'\s*<activity android:name="\.MuReaderActivity"[^>]*/>', '', t)
-            open(m, "w").write(t)
-            PY2
-            ./gradlew assembleDebug
-          fi
+          if [ "$RC" -eq 0 ]; then exit 0; fi
+          echo "::warning::Build with the MuPDF reader FAILED - rebuilding WITHOUT it (the pdf.js reader will be used)."
+          echo "## MuPDF build failed - APK was rebuilt without the MuPDF reader" >> "$GITHUB_STEP_SUMMARY"
+          echo "Send these lines to Claude:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "error:|\.java:[0-9]+|What went wrong|Could not|not found|FAILED" ../build1.log | head -60 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          rm -f app/src/main/java/com/kr/urdulibrary/MuPdfView.java app/src/main/java/com/kr/urdulibrary/MuReaderActivity.java
+          python3 -c "import re;p='app/build.gradle';s=open(p).read();s=re.sub(r'\n\s*implementation \"com\.artifex\.mupdf:fitz:[^\"]*\"','',s);open(p,'w').write(s);m='app/src/main/AndroidManifest.xml';t=open(m).read();t=re.sub(r'\s*<activity android:name=\"\.MuReaderActivity\"[^>]*/>','',t);open(m,'w').write(t)"
+          ./gradlew assembleDebug
 
       - uses: actions/upload-artifact@v4
         with:
