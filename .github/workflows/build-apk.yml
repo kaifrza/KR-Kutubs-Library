@@ -47,12 +47,12 @@ jobs:
 
       - name: Capacitor setup
         run: |
-          echo '{"name":"kr-urdu-library","version":"1.0.0","private":true}' > package.json
+          echo '{"name":"maktabah","version":"1.0.0","private":true}' > package.json
           npm i @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7
           cat > capacitor.config.json <<'EOF2'
           {
             "appId": "com.kr.urdulibrary",
-            "appName": "KR Urdu Library",
+            "appName": "Maktabah",
             "webDir": "www"
           }
           EOF2
