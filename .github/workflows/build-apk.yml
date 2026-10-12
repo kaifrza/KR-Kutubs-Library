@@ -66,18 +66,17 @@ jobs:
           EOF2
           npx cap add android
 
-      - name: Bundle offline libraries (PDF.js, Supabase)
+      - name: Bundle offline library (Supabase)
         continue-on-error: true
         run: |
-          npm i --omit=optional pdfjs-dist@4.10.38 @supabase/supabase-js@2 esbuild
-          mkdir -p www/vendor/pdfjs
-          cp node_modules/pdfjs-dist/build/pdf.mjs www/vendor/pdfjs/
-          cp node_modules/pdfjs-dist/build/pdf.worker.mjs www/vendor/pdfjs/
+          # PDF.js is not referenced by the app code (the native MuPDF reader is used), so it is no longer bundled.
+          npm i --omit=optional @supabase/supabase-js@2 esbuild
+          mkdir -p www/vendor
           echo "export { createClient } from '@supabase/supabase-js';" > vendor-entry.js
           npx esbuild vendor-entry.js --bundle --format=esm --minify --platform=browser --outfile=www/vendor/supabase.js
           # Icons are now inline SVG (css/icons.css), so Font Awesome is no longer bundled.
           echo "Vendor files:"
-          ls -la www/vendor www/vendor/pdfjs
+          ls -la www/vendor
 
       - name: Bundle offline fonts (Noto Naskh Arabic + Inter)
         continue-on-error: true
@@ -88,6 +87,24 @@ jobs:
             cp -r node_modules/@fontsource-variable/$p/files www/vendor/fonts/$p/files
             cp node_modules/@fontsource-variable/$p/index.css www/vendor/fonts/$p/index.css
           done
+          # Keep only the scripts the app uses (latin + arabic); drop cyrillic/greek/vietnamese/latin-ext etc.
+          python3 - <<'PY'
+          import re, os, glob
+          keep = {"latin", "arabic"}
+          for css in glob.glob("www/vendor/fonts/*/index.css"):
+              d = os.path.dirname(css)
+              t = open(css, encoding="utf-8").read()
+              blocks = re.findall(r"(/\*\s*([\w-]+)\s*\*/\s*@font-face\s*\{.*?\})", t, flags=re.S)
+              if not blocks:
+                  print("no subset blocks in", css, "- keeping all"); continue
+              out = "\n".join(b for b, name in blocks if name in keep) + "\n"
+              used = set(re.findall(r"files/([^)'\"]+)", out))
+              for f in glob.glob(d + "/files/*"):
+                  if os.path.basename(f) not in used:
+                      os.remove(f)
+              open(css, "w", encoding="utf-8").write(out)
+              print(css, "kept", sorted(used))
+          PY
           # Swap the Google Fonts <link> (needs internet) for the bundled copies (works offline).
           python3 - <<'PY'
           import re
@@ -195,6 +212,23 @@ jobs:
             $IM $ICON -resize ${s}x${s} $RES/mipmap-$n/ic_launcher.png
             cp $RES/mipmap-$n/ic_launcher.png $RES/mipmap-$n/ic_launcher_round.png
           done
+
+      - name: Smaller APK (single CPU architecture)
+        run: |
+          # MuPDF ships native libs for arm64-v8a, armeabi-v7a, x86 and x86_64; the biggest part of the APK.
+          # Nearly all phones since ~2017 are arm64. Change ABIS to "arm64-v8a, armeabi-v7a" for old 32-bit phones.
+          python3 - <<'PY'
+          import os
+          p = "android/app/build.gradle"
+          s = open(p).read()
+          abis = ", ".join('"%s"' % a.strip() for a in os.environ["ABIS"].split(","))
+          if "abiFilters" not in s:
+              s = s.replace("defaultConfig {", "defaultConfig {\n        ndk { abiFilters %s }" % abis, 1)
+              open(p, "w").write(s)
+          PY
+          grep -n "abiFilters" android/app/build.gradle
+        env:
+          ABIS: "arm64-v8a"
 
       - name: Stable signing key + version code
         run: |
