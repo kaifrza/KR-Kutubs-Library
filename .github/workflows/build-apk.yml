@@ -5,9 +5,14 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,6 +49,9 @@ jobs:
           test -f www/native/android/MainActivity.java
           test -f www/native/android/open-with-filter.xml
           test -f www/js/features/library-screen.js
+          for f in MuReaderActivity MuPdfView; do
+            test -f www/native/android/$f.java || echo "::warning::$f.java missing - the build will use the pdf.js reader"
+          done
 
       - name: Capacitor setup
         run: |
@@ -188,6 +196,33 @@ jobs:
             cp $RES/mipmap-$n/ic_launcher.png $RES/mipmap-$n/ic_launcher_round.png
           done
 
+      - name: Stable signing key + version code
+        run: |
+          # A debug keystore is generated fresh on every runner, so each APK would have a different
+          # signature and Android refuses to update over the installed one ("App not installed").
+          # Add a repo secret DEBUG_KEYSTORE_B64 (base64 of a debug.keystore) to keep one signature.
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "Using the stable debug keystore from secrets."
+          else
+            echo "::warning::DEBUG_KEYSTORE_B64 secret not set - every build gets a new signature, so uninstall the old app before installing."
+          fi
+          python3 - <<'PY'
+          import os, re
+          p = "android/app/build.gradle"
+          s = open(p).read()
+          n = os.environ["RUN_NUMBER"]
+          s2 = re.sub(r"versionCode\s+\d+", "versionCode " + n, s, count=1)
+          s2 = re.sub(r'versionName\s+"[^"]*"', 'versionName "1.0.' + n + '"', s2, count=1)
+          open(p, "w").write(s2)
+          print("versionCode set:", s2 != s)
+          PY
+          grep -n "versionCode\|versionName" android/app/build.gradle
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+          RUN_NUMBER: ${{ github.run_number }}
+
       - name: Sync
         run: npx cap sync android
 
@@ -212,5 +247,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          if-no-files-found: error
           name: Maktabah-APK-${{ github.run_number }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
