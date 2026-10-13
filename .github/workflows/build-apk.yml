@@ -213,6 +213,16 @@ jobs:
             cp $RES/mipmap-$n/ic_launcher.png $RES/mipmap-$n/ic_launcher_round.png
           done
 
+      - name: Native splash (matches the in-app splash)
+        continue-on-error: true
+        run: |
+          # Android launch splash: logo on the app background colour (light #F7F7F5 / dark #101512),
+          # same size and position as the in-app splash (js/splash.js), so the hand-over is seamless.
+          # The script only touches resources and never fails the build; it prints a warning if the
+          # generated project looks different than expected.
+          python3 www/assets/splash/setup_splash.py
+          rm -rf www/assets/splash
+
       - name: Smaller APK (single CPU architecture)
         run: |
           # MuPDF ships native libs for arm64-v8a, armeabi-v7a, x86 and x86_64; the biggest part of the APK.
