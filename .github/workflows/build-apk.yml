@@ -1,3 +1,4 @@
+
 name: Build APK
 
 on:
@@ -13,6 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,32 +33,46 @@ jobs:
         run: |
           echo "All zips in repo:"
           git ls-files | grep -i '\.zip$' || true
-          ZIP=$(git ls-files | grep -i '\.zip$' | while read -r f; do echo "$(git log -1 --format=%ct -- "$f") $f"; done | sort -rn | head -n 1 | cut -d' ' -f2-)
+
+          ZIP=$(git ls-files | grep -i '\.zip$' |
+            while read -r f; do
+              echo "$(git log -1 --format=%ct -- "$f") $f"
+            done | sort -rn | head -n 1 | cut -d' ' -f2-)
+
           echo "Using newest zip: $ZIP"
           test -n "$ZIP"
+
           mkdir -p www
           unzip -oq "$ZIP" -d www
+
           if [ ! -f www/index.html ]; then
             SUB=$(find www -maxdepth 2 -name index.html | head -n 1 | xargs dirname)
             cp -a "$SUB"/. www/
           fi
+
           test -f www/index.html
           rm -rf www/supabase
+
           echo "Build tag in this zip:"
           grep -n "BUILD_TAG =" www/js/features/download-manager.js
+
           echo "Native folder check:"
           test -f www/native/android/KRDownloaderPlugin.java
           test -f www/native/android/MainActivity.java
           test -f www/native/android/open-with-filter.xml
           test -f www/js/features/library-screen.js
+
           for f in MuReaderActivity MuPdfView; do
-            test -f www/native/android/$f.java || echo "::warning::$f.java missing - the build will use the pdf.js reader"
+            test -f www/native/android/$f.java ||
+              echo "::warning::$f.java missing - the build will use the pdf.js reader"
           done
 
       - name: Capacitor setup
         run: |
           echo '{"name":"maktabah","version":"1.0.0","private":true}' > package.json
+
           npm i @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7
+
           cat > capacitor.config.json <<'EOF2'
           {
             "appId": "com.kr.urdulibrary",
@@ -64,17 +80,21 @@ jobs:
             "webDir": "www"
           }
           EOF2
+
           npx cap add android
 
       - name: Bundle offline library (Supabase)
         continue-on-error: true
         run: |
-          # PDF.js is not referenced by the app code (the native MuPDF reader is used), so it is no longer bundled.
           npm i --omit=optional @supabase/supabase-js@2 esbuild
+
           mkdir -p www/vendor
           echo "export { createClient } from '@supabase/supabase-js';" > vendor-entry.js
-          npx esbuild vendor-entry.js --bundle --format=esm --minify --platform=browser --outfile=www/vendor/supabase.js
-          # Icons are now inline SVG (css/icons.css), so Font Awesome is no longer bundled.
+
+          npx esbuild vendor-entry.js \
+            --bundle --format=esm --minify --platform=browser \
+            --outfile=www/vendor/supabase.js
+
           echo "Vendor files:"
           ls -la www/vendor
 
@@ -82,41 +102,70 @@ jobs:
         continue-on-error: true
         run: |
           npm i --omit=optional @fontsource-variable/noto-naskh-arabic @fontsource-variable/inter
+
           for p in noto-naskh-arabic inter; do
             mkdir -p www/vendor/fonts/$p
             cp -r node_modules/@fontsource-variable/$p/files www/vendor/fonts/$p/files
             cp node_modules/@fontsource-variable/$p/index.css www/vendor/fonts/$p/index.css
           done
-          # Keep only the scripts the app uses (latin + arabic); drop cyrillic/greek/vietnamese/latin-ext etc.
+
           python3 - <<'PY'
           import re, os, glob
+
           keep = {"latin", "arabic"}
+
           for css in glob.glob("www/vendor/fonts/*/index.css"):
               d = os.path.dirname(css)
               t = open(css, encoding="utf-8").read()
-              blocks = re.findall(r"(/\*\s*([\w-]+)\s*\*/\s*@font-face\s*\{.*?\})", t, flags=re.S)
+
+              blocks = re.findall(
+                  r"(/\*\s*([\w-]+)\s*\*/\s*@font-face\s*\{.*?\})",
+                  t,
+                  flags=re.S
+              )
+
               if not blocks:
-                  print("no subset blocks in", css, "- keeping all"); continue
+                  print("no subset blocks in", css, "- keeping all")
+                  continue
+
               out = "\n".join(b for b, name in blocks if name in keep) + "\n"
               used = set(re.findall(r"files/([^)'\"]+)", out))
+
               for f in glob.glob(d + "/files/*"):
                   if os.path.basename(f) not in used:
                       os.remove(f)
+
               open(css, "w", encoding="utf-8").write(out)
               print(css, "kept", sorted(used))
           PY
-          # Swap the Google Fonts <link> (needs internet) for the bundled copies (works offline).
+
           python3 - <<'PY'
           import re
+
           p = "www/index.html"
           s = open(p, encoding="utf-8").read()
-          local = ('<link rel="stylesheet" href="./vendor/fonts/noto-naskh-arabic/index.css">\n  '
-                   '<link rel="stylesheet" href="./vendor/fonts/inter/index.css">')
-          s2 = re.sub(r'<link rel="stylesheet" href="https://fonts\.googleapis\.com[^>]*>', local, s)
-          s2 = re.sub(r'\s*<link rel="preconnect" href="https://fonts\.(googleapis|gstatic)\.com"[^>]*>', '', s2)
+
+          local = (
+              '<link rel="stylesheet" href="./vendor/fonts/noto-naskh-arabic/index.css">\n  '
+              '<link rel="stylesheet" href="./vendor/fonts/inter/index.css">'
+          )
+
+          s2 = re.sub(
+              r'<link rel="stylesheet" href="https://fonts\.googleapis\.com[^>]*>',
+              local,
+              s
+          )
+
+          s2 = re.sub(
+              r'\s*<link rel="preconnect" href="https://fonts\.(googleapis|gstatic)\.com"[^>]*>',
+              '',
+              s2
+          )
+
           open(p, "w", encoding="utf-8").write(s2)
           print("fonts link swapped:", s2 != s)
           PY
+
           echo "Font files:"
           ls www/vendor/fonts/*/files | head -20
           grep -n "vendor/fonts" www/index.html || true
@@ -124,26 +173,40 @@ jobs:
       - name: Native Android plugin (Downloads, reader, Open with)
         run: |
           DEST=android/app/src/main/java/com/kr/urdulibrary
+
           cp www/native/android/*.java "$DEST"/
           ls -la "$DEST"
+
           python3 - <<'PY'
           p = "android/app/src/main/AndroidManifest.xml"
           s = open(p).read()
           f = open("www/native/android/open-with-filter.xml").read()
+
           if "application/pdf" not in s:
               s = s.replace("</activity>", f + "        </activity>", 1)
+
           if "MANAGE_EXTERNAL_STORAGE" not in s:
               perms = (
                   '    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n'
                   '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n'
               )
-              s = s.replace("<application", '<application android:requestLegacyExternalStorage="true"', 1)
+
+              s = s.replace(
+                  "<application",
+                  '<application android:requestLegacyExternalStorage="true"',
+                  1
+              )
               s = s.replace("<application", perms + "    <application", 1)
+
           open(p, "w").write(s)
           PY
+
           rm -rf www/native
+
           MF=android/app/src/main/AndroidManifest.xml
+
           sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#&\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />#' "$MF"
+
           cat "$MF"
 
       - name: Native pull-to-refresh dependency
@@ -151,48 +214,67 @@ jobs:
           python3 - <<'PY'
           p = "android/app/build.gradle"
           s = open(p).read()
+
           dep = 'implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"'
+
           if "swiperefreshlayout" not in s:
               s = s.replace("dependencies {", "dependencies {\n    " + dep, 1)
               open(p, "w").write(s)
           PY
+
           grep -n "swiperefreshlayout" android/app/build.gradle
 
       - name: MuPDF native reader (dependency + activity)
         run: |
-          # MuPDF is NOT on Maven Central: Artifex publishes it on maven.ghostscript.com
           META=$(curl -fsSL https://maven.ghostscript.com/com/artifex/mupdf/fitz/maven-metadata.xml || true)
-          VER=$(echo "$META" | grep -o '<version>1\.24\.[0-9]*</version>' | sed 's/<[^>]*>//g' | sort -V | tail -1)
-          if [ -z "$VER" ]; then VER=1.24.10; fi
+
+          VER=$(echo "$META" |
+            grep -o '<version>1\.24\.[0-9]*</version>' |
+            sed 's/<[^>]*>//g' | sort -V | tail -1)
+
+          if [ -z "$VER" ]; then
+            VER=1.24.10
+          fi
+
           echo "Using MuPDF fitz $VER"
           echo "$VER" > mupdf-version.txt
+
           python3 - <<'PY'
           import re
+
           ver = open("mupdf-version.txt").read().strip()
-          # repository (root build.gradle: allprojects + buildscript)
+
           r = "android/build.gradle"
           rs = open(r).read()
           repo = "maven { url 'https://maven.ghostscript.com/' }"
+
           if "maven.ghostscript.com" not in rs:
               rs = rs.replace("mavenCentral()", "mavenCentral()\n        " + repo)
               open(r, "w").write(rs)
-          # dependency
+
           p = "android/app/build.gradle"
           s = open(p).read()
+
           dep = 'implementation "com.artifex.mupdf:fitz:%s"' % ver
+
           if "com.artifex.mupdf:fitz" not in s:
               s = s.replace("dependencies {", "dependencies {\n    " + dep, 1)
               open(p, "w").write(s)
-          # activity
+
           m = "android/app/src/main/AndroidManifest.xml"
           t = open(m).read()
-          act = ('        <activity android:name=".MuReaderActivity" android:exported="false"'
-                 ' android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"'
-                 ' android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />\n')
+
+          act = (
+              '        <activity android:name=".MuReaderActivity" android:exported="false"'
+              ' android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"'
+              ' android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />\n'
+          )
+
           if "MuReaderActivity" not in t:
               t = t.replace("</application>", act + "    </application>", 1)
               open(m, "w").write(t)
           PY
+
           grep -n "ghostscript" android/build.gradle
           grep -n "fitz\|swiperefresh" android/app/build.gradle
           grep -n "MuReaderActivity" android/app/src/main/AndroidManifest.xml
@@ -202,13 +284,17 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y imagemagick
+
           IM=$(command -v magick || command -v convert)
           ICON=www/assets/icons/icon-512.png
           RES=android/app/src/main/res
+
           rm -rf $RES/mipmap-anydpi-v26
+
           for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
             n=${d%%:*}
             s=${d##*:}
+
             $IM $ICON -resize ${s}x${s} $RES/mipmap-$n/ic_launcher.png
             cp $RES/mipmap-$n/ic_launcher.png $RES/mipmap-$n/ic_launcher_round.png
           done
@@ -216,81 +302,228 @@ jobs:
       - name: Native splash (matches the in-app splash)
         continue-on-error: true
         run: |
-          # Android launch splash: logo on the app background colour (light #F7F7F5 / dark #101512),
-          # same size and position as the in-app splash (js/splash.js), so the hand-over is seamless.
-          # The script only touches resources and never fails the build; it prints a warning if the
-          # generated project looks different than expected.
           python3 www/assets/splash/setup_splash.py
           rm -rf www/assets/splash
 
       - name: Smaller APK (single CPU architecture)
         run: |
-          # MuPDF ships native libs for arm64-v8a, armeabi-v7a, x86 and x86_64; the biggest part of the APK.
-          # Nearly all phones since ~2017 are arm64. Change ABIS to "arm64-v8a, armeabi-v7a" for old 32-bit phones.
           python3 - <<'PY'
           import os
+
           p = "android/app/build.gradle"
           s = open(p).read()
+
           abis = ", ".join('"%s"' % a.strip() for a in os.environ["ABIS"].split(","))
+
           if "abiFilters" not in s:
-              s = s.replace("defaultConfig {", "defaultConfig {\n        ndk { abiFilters %s }" % abis, 1)
+              s = s.replace(
+                  "defaultConfig {",
+                  "defaultConfig {\n        ndk { abiFilters %s }" % abis,
+                  1
+              )
               open(p, "w").write(s)
           PY
+
           grep -n "abiFilters" android/app/build.gradle
         env:
           ABIS: "arm64-v8a"
 
-      - name: Stable signing key + version code
+      - name: Configure release signing + version code
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          # A debug keystore is generated fresh on every runner, so each APK would have a different
-          # signature and Android refuses to update over the installed one ("App not installed").
-          # Add a repo secret DEBUG_KEYSTORE_B64 (base64 of a debug.keystore) to keep one signature.
-          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
-            mkdir -p ~/.android
-            echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
-            echo "Using the stable debug keystore from secrets."
-          else
-            echo "::warning::DEBUG_KEYSTORE_B64 secret not set - every build gets a new signature, so uninstall the old app before installing."
-          fi
+          set -Eeuo pipefail
+
+          test -n "$KEYSTORE_BASE64" || {
+            echo "::error::KEYSTORE_BASE64 secret is missing"
+            exit 1
+          }
+
+          test -n "$KEYSTORE_PASSWORD" || {
+            echo "::error::KEYSTORE_PASSWORD secret is missing"
+            exit 1
+          }
+
+          test -n "$KEY_ALIAS" || {
+            echo "::error::KEY_ALIAS secret is missing"
+            exit 1
+          }
+
+          printf '%s' "$KEYSTORE_BASE64" |
+            base64 --decode > android/app/release.keystore
+
+          test -s android/app/release.keystore
+
+          keytool -list \
+            -keystore android/app/release.keystore \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" >/dev/null
+
           python3 - <<'PY'
-          import os, re
+          import os
+          import re
+
           p = "android/app/build.gradle"
           s = open(p).read()
-          n = os.environ["RUN_NUMBER"]
-          s2 = re.sub(r"versionCode\s+\d+", "versionCode " + n, s, count=1)
-          s2 = re.sub(r'versionName\s+"[^"]*"', 'versionName "1.0.' + n + '"', s2, count=1)
-          open(p, "w").write(s2)
-          print("versionCode set:", s2 != s)
+
+          if "signingConfigs {" not in s:
+              signing = """
+              signingConfigs {
+                  release {
+                      storeFile file("release.keystore")
+                      storePassword System.getenv("KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("KEY_ALIAS")
+                      keyPassword System.getenv("KEYSTORE_PASSWORD")
+                  }
+              }
+              """
+
+              s = re.sub(
+                  r'(?m)^android\s*\{',
+                  lambda m: m.group(0) + signing,
+                  s,
+                  count=1
+              )
+
+          build_types = re.search(r'(?m)^\s*buildTypes\s*\{', s)
+
+          if not build_types:
+              raise SystemExit("Could not find buildTypes block")
+
+          match = re.search(
+              r'(?m)^\s*release\s*\{',
+              s[build_types.end():]
+          )
+
+          if not match:
+              raise SystemExit("Could not find release build type")
+
+          start = build_types.end() + match.end()
+          block_end = s.find('\n        }', start)
+
+          block = s[start:block_end if block_end != -1 else len(s)]
+
+          if "signingConfig signingConfigs.release" not in block:
+              s = (
+                  s[:start]
+                  + "\n            signingConfig signingConfigs.release"
+                  + s[start:]
+              )
+
+          run_number = int(os.environ["RUN_NUMBER"])
+
+          if re.search(r'(?m)^\s*versionCode\s+\d+', s):
+              s = re.sub(
+                  r'(?m)^\s*versionCode\s+\d+',
+                  "        versionCode " + str(run_number),
+                  s,
+                  count=1
+              )
+          else:
+              s = re.sub(
+                  r'(?m)^(\s*defaultConfig\s*\{)',
+                  r'\1\n        versionCode ' + str(run_number),
+                  s,
+                  count=1
+              )
+
+          s = re.sub(
+              r'(?m)^\s*versionName\s+"[^"]*"',
+              '        versionName "1.0.' + str(run_number) + '"',
+              s,
+              count=1
+          )
+
+          open(p, "w").write(s)
+          print("Release signing and version code configured.")
           PY
-          grep -n "versionCode\|versionName" android/app/build.gradle
-        env:
-          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
-          RUN_NUMBER: ${{ github.run_number }}
+
+          grep -n "signingConfigs\|signingConfig signingConfigs.release\|versionCode\|versionName" android/app/build.gradle
 
       - name: Sync
         run: npx cap sync android
 
-      - name: Build APK
+      - name: Build Release APK
         working-directory: android
         shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           set +e
-          ./gradlew assembleDebug 2>&1 | tee ../build1.log
+
+          ./gradlew assembleRelease 2>&1 | tee ../build1.log
           RC=${PIPESTATUS[0]}
+
           set -e
-          if [ "$RC" -eq 0 ]; then exit 0; fi
-          echo "::warning::Build with the MuPDF reader FAILED - rebuilding WITHOUT it (the pdf.js reader will be used)."
-          echo "## MuPDF build failed - APK was rebuilt without the MuPDF reader" >> "$GITHUB_STEP_SUMMARY"
-          echo "Send these lines to Claude:" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$RC" -eq 0 ]; then
+            exit 0
+          fi
+
+          echo "::warning::MuPDF release build failed; retrying without MuPDF."
+
+          echo "## MuPDF release build failed - retrying without MuPDF" \
+            >> "$GITHUB_STEP_SUMMARY"
+
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          grep -E "error:|\.java:[0-9]+|What went wrong|Could not|not found|FAILED" ../build1.log | head -60 >> "$GITHUB_STEP_SUMMARY" || true
+
+          grep -E "error:|\.java:[0-9]+|What went wrong|Could not|not found|FAILED" \
+            ../build1.log | head -60 >> "$GITHUB_STEP_SUMMARY" || true
+
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          rm -f app/src/main/java/com/kr/urdulibrary/MuPdfView.java app/src/main/java/com/kr/urdulibrary/MuReaderActivity.java
-          python3 -c "import re;p='app/build.gradle';s=open(p).read();s=re.sub(r'\n\s*implementation \"com\.artifex\.mupdf:fitz:[^\"]*\"','',s);open(p,'w').write(s);m='app/src/main/AndroidManifest.xml';t=open(m).read();t=re.sub(r'\s*<activity android:name=\"\.MuReaderActivity\"[^>]*/>','',t);open(m,'w').write(t)"
-          ./gradlew assembleDebug
+
+          rm -f app/src/main/java/com/kr/urdulibrary/MuPdfView.java
+          rm -f app/src/main/java/com/kr/urdulibrary/MuReaderActivity.java
+
+          python3 - <<'PY'
+          import re
+
+          p = "app/build.gradle"
+          s = open(p).read()
+
+          s = re.sub(
+              r'\n\s*implementation "com\.artifex\.mupdf:fitz:[^"]*"',
+              '',
+              s
+          )
+
+          open(p, "w").write(s)
+
+          m = "app/src/main/AndroidManifest.xml"
+          t = open(m).read()
+
+          t = re.sub(
+              r'\s*<activity android:name="\.MuReaderActivity"[^>]*/>',
+              '',
+              t
+          )
+
+          open(m, "w").write(t)
+          PY
+
+          ./gradlew assembleRelease
+
+      - name: Verify Release APK signature
+        run: |
+          set -Eeuo pipefail
+
+          APK=android/app/build/outputs/apk/release/app-release.apk
+
+          test -s "$APK"
+
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" \
+            -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+
+          "$BUILD_TOOLS/apksigner" verify --verbose "$APK"
+
+          echo "Release APK exists and its signature verified."
 
       - uses: actions/upload-artifact@v4
         with:
           if-no-files-found: error
-          name: Maktabah-APK-${{ github.run_number }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Maktabah-Release-APK-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
