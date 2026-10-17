@@ -13,6 +13,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: write   # lets the first run save the signing key into the repo
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,7 +51,7 @@ jobs:
           test -f www/native/android/MainActivity.java
           test -f www/native/android/open-with-filter.xml
           test -f www/js/features/library-screen.js
-          for f in MuReaderActivity MuPdfView; do
+          for f in MuReaderActivity MuPdfView MuAnnot MuAnnotStore MuInk MuSnap MuDock; do
             test -f www/native/android/$f.java || echo "::warning::$f.java missing - the build will use the pdf.js reader"
           done
 
@@ -242,16 +244,33 @@ jobs:
 
       - name: Stable signing key + version code
         run: |
-          # A debug keystore is generated fresh on every runner, so each APK would have a different
-          # signature and Android refuses to update over the installed one ("App not installed").
-          # Add a repo secret DEBUG_KEYSTORE_B64 (base64 of a debug.keystore) to keep one signature.
+          # Every runner is fresh, so a new debug keystore would give each APK a different signature and
+          # Android would refuse to update the installed app. We keep ONE keystore in the repo
+          # (keystore/debug.keystore): the first run creates and commits it, every later run reuses it.
+          # (Optional: a DEBUG_KEYSTORE_B64 secret overrides it.)
+          # Never delete the keystore/ folder from the repo - a new key means one more uninstall.
+          mkdir -p ~/.android
           if [ -n "$DEBUG_KEYSTORE_B64" ]; then
-            mkdir -p ~/.android
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
             echo "Using the stable debug keystore from secrets."
           else
-            echo "::warning::DEBUG_KEYSTORE_B64 secret not set - every build gets a new signature, so uninstall the old app before installing."
+            if [ ! -f keystore/debug.keystore ]; then
+              mkdir -p keystore
+              keytool -genkeypair -keystore keystore/debug.keystore \
+                -storepass android -keypass android -alias androiddebugkey \
+                -keyalg RSA -keysize 2048 -validity 36500 \
+                -dname "CN=Android Debug,O=Android,C=US"
+              git config user.name "github-actions"
+              git config user.email "actions@github.com"
+              git add keystore/debug.keystore
+              git commit -m "Add stable debug keystore"
+              git pull --rebase origin "$GITHUB_REF_NAME" || true
+              git push origin "HEAD:$GITHUB_REF_NAME" || echo "::warning::Could not save the keystore to the repo - the next build will get a new signature."
+            fi
+            cp keystore/debug.keystore ~/.android/debug.keystore
+            echo "Using the keystore from the repo."
           fi
+          keytool -list -keystore ~/.android/debug.keystore -storepass android 2>/dev/null | grep -i "fingerprint" || true
           python3 - <<'PY'
           import os, re
           p = "android/app/build.gradle"
@@ -285,7 +304,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           grep -E "error:|\.java:[0-9]+|What went wrong|Could not|not found|FAILED" ../build1.log | head -60 >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          rm -f app/src/main/java/com/kr/urdulibrary/MuPdfView.java app/src/main/java/com/kr/urdulibrary/MuReaderActivity.java
+          rm -f app/src/main/java/com/kr/urdulibrary/MuPdfView.java app/src/main/java/com/kr/urdulibrary/MuReaderActivity.java app/src/main/java/com/kr/urdulibrary/MuDock.java
           python3 -c "import re;p='app/build.gradle';s=open(p).read();s=re.sub(r'\n\s*implementation \"com\.artifex\.mupdf:fitz:[^\"]*\"','',s);open(p,'w').write(s);m='app/src/main/AndroidManifest.xml';t=open(m).read();t=re.sub(r'\s*<activity android:name=\"\.MuReaderActivity\"[^>]*/>','',t);open(m,'w').write(t)"
           ./gradlew assembleDebug
 
